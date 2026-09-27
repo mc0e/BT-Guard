@@ -1,0 +1,25 @@
+{
+    "author": "mc0e",
+    "dependencies": {},
+    "keywords": [],
+    "name": "bt-guard",
+    "pebble": {
+        "displayName": "BT Guard",
+        "enableMultiJS": true,
+        "messageKeys": [],
+        "projectType": "native",
+        "resources": {
+            "media": []
+        },
+        "sdkVersion": "3",
+        "targetPlatforms": [
+            "emery",
+            "flint"
+        ],
+        "uuid": "2eb29eab-b154-4b17-8daf-ba6e64f7e71a",
+        "watchapp": {
+            "watchface": false
+        }
+    },
+    "version": "1.0.0"
+}
