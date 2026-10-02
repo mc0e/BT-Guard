@@ -10,6 +10,12 @@
 // own, only Foundation-level services like ConnectionService, Timer,
 // and Storage.
 //
+// It also launches the app on the disconnected -> connected edge (a
+// single launch, not a repeating schedule): bt_guard.c uses
+// launch_reason() == APP_LAUNCH_WORKER combined with a live peek of
+// the connection state to tell "still down" and "just reconnected"
+// apart, so no extra persisted flag is needed here.
+//
 // While the app stays open it takes over the actual repeat-buzzing
 // itself (see bt_guard.c), so this worker's own timer here is really
 // a fallback: it keeps relaunching the app on the selected interval in
@@ -88,9 +94,17 @@ static void stop_alerting(void) {
 }
 
 static void bt_handler(bool connected) {
+  bool was_connected = s_connected;
   s_connected = connected;
+
   if (connected) {
     stop_alerting();
+    if (!was_connected) {
+      // We just came back - launch the app once so it can show the
+      // reconnected/locate screen. Not a repeating schedule; if the
+      // app is already open this is a harmless no-op relaunch.
+      worker_launch_app();
+    }
   } else {
     start_alerting();
   }

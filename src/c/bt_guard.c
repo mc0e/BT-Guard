@@ -3,25 +3,33 @@
 // ---------------------------------------------------------------------
 // Foreground app.
 //
-// One screen: a menu of alert repeat intervals (30 sec / 5 min /
-// 20 min / 1 hour / None), with the active one marked. This is the
-// same screen whether the worker just launched us because the phone
-// link dropped, or you opened the app yourself.
+// Three screens, chosen at launch (and switched live while open) based
+// on why we were started and the current connection state:
 //
-// While disconnected, this screen buzzes on the selected schedule for
-// as long as it stays open - the app owns its own repeat timer rather
-// than depending on the worker to relaunch it for every buzz, so
-// alerting keeps going while you're looking at the menu. Picking a
-// different row takes effect immediately, both here and for the
-// worker's background schedule (once you leave).
+//   SPLASH_OK           - "Connected, running" full-screen message.
+//                          Auto-dismisses after ~1.5s. Shown when we're
+//                          launched normally (system/user/other) and
+//                          the phone link is already up.
 //
-// If the phone reconnects while this screen is showing, we swap the
-// menu out for a brief "connection re-established" message and then
-// pop the window ourselves.
+//   DISCONNECTED_MENU    - "Phone disconnected" banner over the alert
+//                          interval menu (which also carries a "Sound
+//                          phone" row). Shown whenever we're launched
+//                          and the link is down, however we got here.
+//                          Buzzes on the selected repeat interval for
+//                          as long as this screen stays open.
 //
-// The system Back button is the standard way to leave the screen;
-// there's no custom "dismiss" handler otherwise - Select just picks a
-// row.
+//   RECONNECTED_LOCATE   - Shown when the link comes back: either live,
+//                          while DISCONNECTED_MENU is open, or because
+//                          the worker just launched us specifically to
+//                          report a reconnect (see worker.c). Buzzes
+//                          once with a distinct pattern, offers Select
+//                          to make the phone sound (real AppMessage to
+//                          a phone-side script - see src/pkjs), and
+//                          auto-dismisses after 15s of no interaction
+//                          (each Select press resets that timer).
+//
+// The system Back button always leaves the screen immediately,
+// regardless of state or timers.
 // ---------------------------------------------------------------------
 
 #define PERSIST_KEY_INTERVAL_INDEX 100   // must match worker.c
@@ -29,9 +37,9 @@
 #define NUM_INTERVAL_OPTIONS 5           // must match worker.c
 #define NONE_INDEX (NUM_INTERVAL_OPTIONS - 1)
 
-// How long the "connection re-established" message stays up before we
-// pop the window ourselves.
-#define RECONNECT_DISMISS_MS 1500
+#define SPLASH_DISMISS_MS 1500
+#define LOCATE_DISMISS_MS 15000
+#define LOCATE_FEEDBACK_MS 1000
 
 // Shortest first, "None" last.
 static const char * const s_interval_labels[NUM_INTERVAL_OPTIONS] = {
@@ -42,15 +50,31 @@ static const uint32_t s_interval_ms[NUM_INTERVAL_OPTIONS] = {
   30 * 1000, 5 * 60 * 1000, 20 * 60 * 1000, 60 * 60 * 1000, 0
 };
 
+typedef enum {
+  STATE_SPLASH_OK,
+  STATE_DISCONNECTED_MENU,
+  STATE_RECONNECTED_LOCATE,
+} AppScreenState;
+
 static Window *s_window;
-static MenuLayer *s_menu_layer;
-static TextLayer *s_reconnect_layer;
+static TextLayer *s_splash_layer;
+static TextLayer *s_status_layer;   // banner above the border, D/R states
+static Layer *s_border_layer;       // rounded-rect frame, D/R states
+static MenuLayer *s_menu_layer;     // D state content
+static TextLayer *s_locate_layer;   // R state content
+
+static AppScreenState s_state;
+static AppLaunchReason s_launch_reason;
 
 static int s_active_index;      // persisted "current" choice, marked in the menu
-static AppTimer *s_alert_timer; // drives repeat buzzing while this screen is open
+static AppTimer *s_alert_timer; // repeat buzz while DISCONNECTED_MENU is open
+static AppTimer *s_splash_timer;
+static AppTimer *s_locate_timer;
+static AppTimer *s_feedback_timer;
 
-static bool s_was_connected;    // previous connection state, to detect the edge
-static AppTimer *s_dismiss_timer; // pops the window after the reconnect message
+// Forward decl: defined in the "Border drawing" section below, but
+// referenced from window_load() above it.
+static void border_layer_update_proc(Layer *layer, GContext *ctx);
 
 static int clamp_index(int idx) {
   if (idx < 0) return 0;
@@ -60,6 +84,17 @@ static int clamp_index(int idx) {
 
 static void vibrate_alert(void) {
   static const uint32_t segments[] = { 100, 200, 100, 200, 100, 200, 100, 200, 300 };
+  VibePattern pattern = {
+    .durations = segments,
+    .num_segments = ARRAY_LENGTH(segments),
+  };
+  vibes_enqueue_custom_pattern(pattern);
+}
+
+// Deliberately distinct from vibrate_alert()'s urgent pattern - a
+// short double-buzz, since this means good news (link is back).
+static void vibrate_reconnect(void) {
+  static const uint32_t segments[] = { 100, 100, 100 };
   VibePattern pattern = {
     .durations = segments,
     .num_segments = ARRAY_LENGTH(segments),
@@ -78,7 +113,27 @@ static void notify_worker_of_interval(int idx) {
   app_worker_send_message(MSG_TYPE_SET_INTERVAL, &msg);
 }
 
-// ---- Repeat-buzz timer, active only while this screen is open --------
+// ---- "Sound phone" - real AppMessage to the phone-side script --------
+
+static void outbox_failed_handler(DictionaryIterator *iter, AppMessageResult reason, void *context) {
+  // Couldn't get the request to the phone at all (JS not ready, etc.) -
+  // fall back to a vibrate so the button never feels dead.
+  vibrate_alert();
+}
+
+static void request_phone_sound(void) {
+  DictionaryIterator *iter;
+  if (app_message_outbox_begin(&iter) != APP_MSG_OK) {
+    vibrate_alert();
+    return;
+  }
+  dict_write_uint8(iter, MESSAGE_KEY_SOUND_PHONE, 1);
+  if (app_message_outbox_send() != APP_MSG_OK) {
+    vibrate_alert();
+  }
+}
+
+// ---- Repeat-buzz timer, active only in DISCONNECTED_MENU --------------
 
 static void alert_tick(void *data) {
   if (!connection_service_peek_pebble_app_connection() && s_interval_ms[s_active_index] > 0) {
@@ -89,97 +144,141 @@ static void alert_tick(void *data) {
   }
 }
 
-static void restart_alert_timer(void) {
+static void cancel_alert_timer(void) {
   if (s_alert_timer) {
     app_timer_cancel(s_alert_timer);
     s_alert_timer = NULL;
   }
+}
+
+static void restart_alert_timer(void) {
+  cancel_alert_timer();
   if (!connection_service_peek_pebble_app_connection() && s_interval_ms[s_active_index] > 0) {
     s_alert_timer = app_timer_register(s_interval_ms[s_active_index], alert_tick, NULL);
   }
 }
 
-// ---- Reconnect message / auto-dismiss ---------------------------------
+// ---- Splash auto-dismiss ------------------------------------------------
 
-static void dismiss_after_reconnect(void *data) {
-  s_dismiss_timer = NULL;
+static void dismiss_splash(void *data) {
+  s_splash_timer = NULL;
   window_stack_pop(true);
 }
 
-static void show_reconnect_message(void) {
-  if (s_dismiss_timer) {
-    return; // already showing the message and counting down
+static void cancel_splash_timer(void) {
+  if (s_splash_timer) {
+    app_timer_cancel(s_splash_timer);
+    s_splash_timer = NULL;
   }
-
-  layer_set_hidden(menu_layer_get_layer(s_menu_layer), true);
-
-  if (!s_reconnect_layer) {
-    GRect bounds = layer_get_bounds(window_get_root_layer(s_window));
-    s_reconnect_layer = text_layer_create(bounds);
-    text_layer_set_background_color(s_reconnect_layer, GColorWhite);
-    text_layer_set_text_color(s_reconnect_layer, GColorBlack);
-    text_layer_set_font(s_reconnect_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
-    text_layer_set_text_alignment(s_reconnect_layer, GTextAlignmentCenter);
-    text_layer_set_overflow_mode(s_reconnect_layer, GTextOverflowModeWordWrap);
-    text_layer_set_text(s_reconnect_layer, "Connection re-established");
-    layer_add_child(window_get_root_layer(s_window), text_layer_get_layer(s_reconnect_layer));
-  } else {
-    layer_set_hidden(text_layer_get_layer(s_reconnect_layer), false);
-  }
-
-  s_dismiss_timer = app_timer_register(RECONNECT_DISMISS_MS, dismiss_after_reconnect, NULL);
 }
 
-static void connection_handler(bool connected) {
-  // Stop nagging the moment we reconnect; if it drops again while this
-  // screen is still open, resume on whatever interval is selected.
-  restart_alert_timer();
-
-  if (connected && !s_was_connected) {
-    // We just came back from an outage while this screen was open -
-    // say so, then dismiss ourselves shortly after.
-    show_reconnect_message();
-  }
-  s_was_connected = connected;
+static void start_splash_timer(void) {
+  cancel_splash_timer();
+  s_splash_timer = app_timer_register(SPLASH_DISMISS_MS, dismiss_splash, NULL);
 }
 
-// ---- Menu callbacks ----------------------------------------------------
+// ---- Locate-screen idle auto-dismiss and Select feedback ---------------
+
+static void dismiss_locate(void *data) {
+  s_locate_timer = NULL;
+  window_stack_pop(true);
+}
+
+static void cancel_locate_timer(void) {
+  if (s_locate_timer) {
+    app_timer_cancel(s_locate_timer);
+    s_locate_timer = NULL;
+  }
+}
+
+static void restart_locate_timer(void) {
+  cancel_locate_timer();
+  s_locate_timer = app_timer_register(LOCATE_DISMISS_MS, dismiss_locate, NULL);
+}
+
+static void revert_locate_text(void *data) {
+  s_feedback_timer = NULL;
+  if (s_state == STATE_RECONNECTED_LOCATE) {
+    text_layer_set_text(s_locate_layer, "Press Select\nto sound phone");
+  }
+}
+
+static void locate_select_click_handler(ClickRecognizerRef recognizer, void *context) {
+  request_phone_sound();
+  text_layer_set_text(s_locate_layer, "Beeping...");
+
+  if (s_feedback_timer) {
+    app_timer_cancel(s_feedback_timer);
+  }
+  s_feedback_timer = app_timer_register(LOCATE_FEEDBACK_MS, revert_locate_text, NULL);
+
+  // Any interaction with the locate screen pushes the auto-dismiss back.
+  restart_locate_timer();
+}
+
+static void locate_click_config_provider(void *context) {
+  window_single_click_subscribe(BUTTON_ID_SELECT, locate_select_click_handler);
+}
+
+// ---- Menu callbacks (2 sections: "Sound phone", "Alert every:") -------
+//
+// Section 0, row 0: the "Sound phone" action.
+// Section 1, rows 0..NUM_INTERVAL_OPTIONS-1: the interval choices,
+// with the active one marked, same as before.
+
+static uint16_t get_num_sections(MenuLayer *menu_layer, void *context) {
+  return 2;
+}
 
 static uint16_t get_num_rows(MenuLayer *menu_layer, uint16_t section_index, void *context) {
-  return NUM_INTERVAL_OPTIONS;
+  return (section_index == 0) ? 1 : NUM_INTERVAL_OPTIONS;
 }
 
 static int16_t get_header_height(MenuLayer *menu_layer, uint16_t section_index, void *context) {
-  return 22;
+  return (section_index == 1) ? 20 : 0;
 }
 
 static void draw_header(GContext *ctx, const Layer *cell_layer, uint16_t section_index, void *context) {
+  if (section_index != 1) {
+    return;
+  }
   GRect bounds = layer_get_bounds(cell_layer);
   graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, "Alert every:", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-                      GRect(4, 2, bounds.size.w - 8, 20),
+  graphics_draw_text(ctx, "Alert every:", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                      GRect(4, 1, bounds.size.w - 8, 18),
                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
 
 static int16_t get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index, void *context) {
-  return 46;
+  return 36;
 }
 
 static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *context) {
-  uint16_t row = cell_index->row;
   GRect bounds = layer_get_bounds(cell_layer);
+  graphics_context_set_text_color(ctx, GColorBlack);
 
+  if (cell_index->section == 0) {
+    graphics_draw_text(ctx, "Sound phone", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                        GRect(4, 4, bounds.size.w - 8, bounds.size.h - 4),
+                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+    return;
+  }
+
+  uint16_t row = cell_index->row;
   char buf[24];
   snprintf(buf, sizeof(buf), "%s%s", (row == (uint16_t) s_active_index) ? "> " : "  ",
            s_interval_labels[row]);
-
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD),
-                      GRect(4, 6, bounds.size.w - 8, bounds.size.h - 6),
+  graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                      GRect(4, 4, bounds.size.w - 8, bounds.size.h - 4),
                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
 
 static void select_click(MenuLayer *menu_layer, MenuIndex *cell_index, void *context) {
+  if (cell_index->section == 0) {
+    request_phone_sound();
+    return;
+  }
+
   uint16_t row = cell_index->row;
   if (row == (uint16_t) s_active_index) {
     return; // already active
@@ -191,14 +290,118 @@ static void select_click(MenuLayer *menu_layer, MenuIndex *cell_index, void *con
   layer_mark_dirty(menu_layer_get_layer(s_menu_layer));
 }
 
+// ---- State machine -------------------------------------------------------
+
+static void enter_state(AppScreenState new_state) {
+  s_state = new_state;
+
+  layer_set_hidden(text_layer_get_layer(s_splash_layer), true);
+  layer_set_hidden(text_layer_get_layer(s_status_layer), true);
+  layer_set_hidden(s_border_layer, true);
+  layer_set_hidden(menu_layer_get_layer(s_menu_layer), true);
+  layer_set_hidden(text_layer_get_layer(s_locate_layer), true);
+
+  cancel_splash_timer();
+  cancel_alert_timer();
+  cancel_locate_timer();
+  if (s_feedback_timer) {
+    app_timer_cancel(s_feedback_timer);
+    s_feedback_timer = NULL;
+  }
+
+  switch (new_state) {
+    case STATE_SPLASH_OK:
+      layer_set_hidden(text_layer_get_layer(s_splash_layer), false);
+      window_set_click_config_provider(s_window, NULL);
+      start_splash_timer();
+      break;
+
+    case STATE_DISCONNECTED_MENU:
+      layer_set_hidden(text_layer_get_layer(s_status_layer), false);
+      text_layer_set_text(s_status_layer, "Phone disconnected");
+      layer_set_hidden(s_border_layer, false);
+      layer_set_hidden(menu_layer_get_layer(s_menu_layer), false);
+      menu_layer_set_click_config_onto_window(s_menu_layer, s_window);
+      restart_alert_timer();
+      break;
+
+    case STATE_RECONNECTED_LOCATE:
+      layer_set_hidden(text_layer_get_layer(s_status_layer), false);
+      text_layer_set_text(s_status_layer, "Phone reconnected");
+      layer_set_hidden(s_border_layer, false);
+      layer_set_hidden(text_layer_get_layer(s_locate_layer), false);
+      text_layer_set_text(s_locate_layer, "Press Select\nto sound phone");
+      window_set_click_config_provider(s_window, locate_click_config_provider);
+      vibrate_reconnect();
+      restart_locate_timer();
+      break;
+  }
+}
+
+static void connection_handler(bool connected) {
+  switch (s_state) {
+    case STATE_SPLASH_OK:
+      if (!connected) {
+        // Dropped while we were still showing "all good" - switch
+        // straight into the real disconnected flow.
+        enter_state(STATE_DISCONNECTED_MENU);
+      }
+      break;
+
+    case STATE_DISCONNECTED_MENU:
+      if (connected) {
+        enter_state(STATE_RECONNECTED_LOCATE);
+      } else {
+        restart_alert_timer(); // defensive; normally just a no-op reschedule
+      }
+      break;
+
+    case STATE_RECONNECTED_LOCATE:
+      if (!connected) {
+        // Dropped again before being dismissed - resume the normal
+        // disconnected flow rather than keep offering to "locate" a
+        // phone that isn't there right now.
+        enter_state(STATE_DISCONNECTED_MENU);
+      }
+      break;
+  }
+}
+
 // ---- Window lifecycle ---------------------------------------------------
 
 static void window_load(Window *window) {
   Layer *window_layer = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(window_layer);
 
-  s_menu_layer = menu_layer_create(bounds);
+  int16_t top_h = bounds.size.h / 4;
+  int16_t bottom_h = bounds.size.h - top_h;
+  int16_t margin = 4;
+
+  GRect status_frame = GRect(0, 0, bounds.size.w, top_h);
+  GRect border_frame = GRect(0, top_h, bounds.size.w, bottom_h);
+  GRect inner_frame = GRect(margin, top_h + margin,
+                             bounds.size.w - 2 * margin, bottom_h - 2 * margin);
+
+  s_splash_layer = text_layer_create(bounds);
+  text_layer_set_text(s_splash_layer, "Connected\n\nBT Guard running");
+  text_layer_set_font(s_splash_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_text_alignment(s_splash_layer, GTextAlignmentCenter);
+  text_layer_set_overflow_mode(s_splash_layer, GTextOverflowModeWordWrap);
+  layer_add_child(window_layer, text_layer_get_layer(s_splash_layer));
+
+  s_status_layer = text_layer_create(status_frame);
+  text_layer_set_font(s_status_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  text_layer_set_text_alignment(s_status_layer, GTextAlignmentCenter);
+  text_layer_set_overflow_mode(s_status_layer, GTextOverflowModeWordWrap);
+  layer_add_child(window_layer, text_layer_get_layer(s_status_layer));
+
+  s_border_layer = layer_create(border_frame);
+  layer_set_update_proc(s_border_layer, border_layer_update_proc);
+  layer_add_child(window_layer, s_border_layer);
+
+  s_menu_layer = menu_layer_create(inner_frame);
   menu_layer_set_callbacks(s_menu_layer, NULL, (MenuLayerCallbacks) {
+    .get_num_sections = get_num_sections,
     .get_num_rows = get_num_rows,
     .get_header_height = get_header_height,
     .draw_header = draw_header,
@@ -206,28 +409,65 @@ static void window_load(Window *window) {
     .draw_row = draw_row,
     .select_click = select_click,
   });
-  menu_layer_set_click_config_onto_window(s_menu_layer, window);
-  menu_layer_set_selected_index(s_menu_layer, MenuIndex(s_active_index, 0), MenuRowAlignCenter, false);
-  menu_layer_set_highlight_colors 	( s_menu_layer, GColorCyan, GColorBlack );
+  menu_layer_set_selected_index(s_menu_layer, MenuIndex(1, s_active_index), MenuRowAlignCenter, false);
+  menu_layer_set_highlight_colors(s_menu_layer, GColorCyan, GColorBlack);
   layer_add_child(window_layer, menu_layer_get_layer(s_menu_layer));
+
+  s_locate_layer = text_layer_create(inner_frame);
+  text_layer_set_font(s_locate_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_text_alignment(s_locate_layer, GTextAlignmentCenter);
+  text_layer_set_overflow_mode(s_locate_layer, GTextOverflowModeWordWrap);
+  layer_add_child(window_layer, text_layer_get_layer(s_locate_layer));
+
+  enter_state(s_state);
+
+  if (s_launch_reason == APP_LAUNCH_WORKER && s_state == STATE_DISCONNECTED_MENU) {
+    // Fresh alert from the worker while still disconnected - buzz right
+    // away rather than waiting out the first interval.
+    vibrate_alert();
+  }
 }
 
 static void window_unload(Window *window) {
+  text_layer_destroy(s_splash_layer);
+  text_layer_destroy(s_status_layer);
+  layer_destroy(s_border_layer);
   menu_layer_destroy(s_menu_layer);
-  if (s_reconnect_layer) {
-    text_layer_destroy(s_reconnect_layer);
-    s_reconnect_layer = NULL;
-  }
+  text_layer_destroy(s_locate_layer);
 }
+
+// ---- Border drawing -------------------------------------------------------
+
+static void border_layer_update_proc(Layer *layer, GContext *ctx) {
+  GRect bounds = layer_get_bounds(layer);
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  graphics_draw_round_rect(ctx, GRect(0, 0, bounds.size.w, bounds.size.h), 8);
+}
+
+// ---- App lifecycle ---------------------------------------------------------
 
 static void init(void) {
   s_active_index = clamp_index(persist_read_int(PERSIST_KEY_INTERVAL_INDEX));
 
   ensure_worker_running();
-  s_was_connected = connection_service_peek_pebble_app_connection();
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = connection_handler,
   });
+
+  app_message_register_outbox_failed(outbox_failed_handler);
+  app_message_open(64, 64);
+
+  s_launch_reason = launch_reason();
+  bool connected = connection_service_peek_pebble_app_connection();
+
+  if (s_launch_reason == APP_LAUNCH_WORKER) {
+    // The worker only ever launches us for one of two reasons: we're
+    // still disconnected (standard alert), or we just reconnected
+    // (see worker.c) - live status tells us which.
+    s_state = connected ? STATE_RECONNECTED_LOCATE : STATE_DISCONNECTED_MENU;
+  } else {
+    s_state = connected ? STATE_SPLASH_OK : STATE_DISCONNECTED_MENU;
+  }
 
   s_window = window_create();
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -235,22 +475,14 @@ static void init(void) {
     .unload = window_unload,
   });
   window_stack_push(s_window, true);
-
-  if (launch_reason() == APP_LAUNCH_WORKER) {
-    // Fresh alert - buzz right away.
-    vibrate_alert();
-  }
-  // Begin (or resume) repeat buzzing while this screen stays open, if
-  // we're actually disconnected and a repeat interval is selected.
-  restart_alert_timer();
 }
 
 static void deinit(void) {
-  if (s_alert_timer) {
-    app_timer_cancel(s_alert_timer);
-  }
-  if (s_dismiss_timer) {
-    app_timer_cancel(s_dismiss_timer);
+  cancel_alert_timer();
+  cancel_splash_timer();
+  cancel_locate_timer();
+  if (s_feedback_timer) {
+    app_timer_cancel(s_feedback_timer);
   }
   connection_service_unsubscribe();
   window_destroy(s_window);
