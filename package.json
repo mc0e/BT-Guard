@@ -6,7 +6,9 @@
     "pebble": {
         "displayName": "BT Guard",
         "enableMultiJS": true,
-        "messageKeys": [],
+        "messageKeys": [
+            "SOUND_PHONE"
+        ],
         "projectType": "native",
         "resources": {
             "media": []
