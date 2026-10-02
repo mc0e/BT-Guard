@@ -3,13 +3,20 @@
 // ---------------------------------------------------------------------
 // Foreground app.
 //
-// Three screens, chosen at launch (and switched live while open) based
+// Four screens, chosen at launch (and switched live while open) based
 // on why we were started and the current connection state:
+//
+//   CONNECTED_LOCATE     - Shown when the user opens the app (launcher or
+//                          quick launch) while the phone is connected.
+//                          Same "Press Select to sound phone" screen as
+//                          RECONNECTED_LOCATE, but no vibration. Auto-
+//                          dismisses after 60s of no interaction.
 //
 //   SPLASH_OK           - "Connected, running" full-screen message.
 //                          Auto-dismisses after ~1.5s. Shown when we're
-//                          launched normally (system/user/other) and
-//                          the phone link is already up.
+//                          launched by anything other than the user or
+//                          quick launch (system, phone, etc.) and the
+//                          phone link is already up.
 //
 //   DISCONNECTED_MENU    - "Phone disconnected" banner over the alert
 //                          interval menu (which also carries a "Sound
@@ -25,8 +32,9 @@
 //                          once with a distinct pattern, offers Select
 //                          to make the phone sound (real AppMessage to
 //                          a phone-side script - see src/pkjs), and
-//                          auto-dismisses after 15s of no interaction
-//                          (each Select press resets that timer).
+//                          auto-dismisses after 15s of no interaction, or
+//                          60s if the user opened the app or has pressed
+//                          anything since (each Select press resets it).
 //
 // The system Back button always leaves the screen immediately,
 // regardless of state or timers.
@@ -38,7 +46,8 @@
 #define NONE_INDEX (NUM_INTERVAL_OPTIONS - 1)
 
 #define SPLASH_DISMISS_MS 1500
-#define LOCATE_DISMISS_MS 15000
+#define LOCATE_DISMISS_MS 15000          // untouched, not opened by the user
+#define LOCATE_DISMISS_ENGAGED_MS 60000  // user opened the app, or has interacted
 #define LOCATE_FEEDBACK_MS 1000
 
 // Shortest first, "None" last.
@@ -52,6 +61,7 @@ static const uint32_t s_interval_ms[NUM_INTERVAL_OPTIONS] = {
 
 typedef enum {
   STATE_SPLASH_OK,
+  STATE_CONNECTED_LOCATE,
   STATE_DISCONNECTED_MENU,
   STATE_RECONNECTED_LOCATE,
 } AppScreenState;
@@ -65,6 +75,11 @@ static TextLayer *s_locate_layer;   // R state content
 
 static AppScreenState s_state;
 static AppLaunchReason s_launch_reason;
+// True once the user has deliberately opened the app (launcher / quick
+// launch) or pressed anything in it since it opened. Lengthens the
+// locate-screen auto-dismiss from 15s to 60s.
+static bool s_engaged;
+static bool s_menu_ready;  // ignore menu selection callbacks during setup
 
 static int s_active_index;      // persisted "current" choice, marked in the menu
 static AppTimer *s_alert_timer; // repeat buzz while DISCONNECTED_MENU is open
@@ -193,17 +208,19 @@ static void cancel_locate_timer(void) {
 
 static void restart_locate_timer(void) {
   cancel_locate_timer();
-  s_locate_timer = app_timer_register(LOCATE_DISMISS_MS, dismiss_locate, NULL);
+  s_locate_timer = app_timer_register(
+      s_engaged ? LOCATE_DISMISS_ENGAGED_MS : LOCATE_DISMISS_MS, dismiss_locate, NULL);
 }
 
 static void revert_locate_text(void *data) {
   s_feedback_timer = NULL;
-  if (s_state == STATE_RECONNECTED_LOCATE) {
+  if (s_state == STATE_RECONNECTED_LOCATE || s_state == STATE_CONNECTED_LOCATE) {
     text_layer_set_text(s_locate_layer, "Press Select\nto sound phone");
   }
 }
 
 static void locate_select_click_handler(ClickRecognizerRef recognizer, void *context) {
+  s_engaged = true;
   request_phone_sound();
   text_layer_set_text(s_locate_layer, "Beeping...");
 
@@ -273,7 +290,15 @@ static void draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_ind
                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
 
+static void selection_changed(MenuLayer *menu_layer, MenuIndex new_index, MenuIndex old_index,
+                              void *context) {
+  if (s_menu_ready) {
+    s_engaged = true;  // Up/Down scrolling counts as interaction
+  }
+}
+
 static void select_click(MenuLayer *menu_layer, MenuIndex *cell_index, void *context) {
+  s_engaged = true;
   if (cell_index->section == 0) {
     request_phone_sound();
     return;
@@ -325,14 +350,19 @@ static void enter_state(AppScreenState new_state) {
       restart_alert_timer();
       break;
 
+    case STATE_CONNECTED_LOCATE:
     case STATE_RECONNECTED_LOCATE:
       layer_set_hidden(text_layer_get_layer(s_status_layer), false);
-      text_layer_set_text(s_status_layer, "Phone reconnected");
+      text_layer_set_text(s_status_layer,
+                          new_state == STATE_RECONNECTED_LOCATE ? "Phone reconnected"
+                                                                : "Phone connected");
       layer_set_hidden(s_border_layer, false);
       layer_set_hidden(text_layer_get_layer(s_locate_layer), false);
       text_layer_set_text(s_locate_layer, "Press Select\nto sound phone");
       window_set_click_config_provider(s_window, locate_click_config_provider);
-      vibrate_reconnect();
+      if (new_state == STATE_RECONNECTED_LOCATE) {
+        vibrate_reconnect();  // only for a genuine reconnect, not a manual open
+      }
       restart_locate_timer();
       break;
   }
@@ -356,6 +386,7 @@ static void connection_handler(bool connected) {
       }
       break;
 
+    case STATE_CONNECTED_LOCATE:
     case STATE_RECONNECTED_LOCATE:
       if (!connected) {
         // Dropped again before being dismissed - resume the normal
@@ -408,6 +439,7 @@ static void window_load(Window *window) {
     .get_cell_height = get_cell_height,
     .draw_row = draw_row,
     .select_click = select_click,
+    .selection_changed = selection_changed,
   });
   menu_layer_set_selected_index(s_menu_layer, MenuIndex(1, s_active_index), MenuRowAlignCenter, false);
   menu_layer_set_highlight_colors(s_menu_layer, GColorCyan, GColorBlack);
@@ -419,6 +451,7 @@ static void window_load(Window *window) {
   text_layer_set_overflow_mode(s_locate_layer, GTextOverflowModeWordWrap);
   layer_add_child(window_layer, text_layer_get_layer(s_locate_layer));
 
+  s_menu_ready = true;
   enter_state(s_state);
 
   if (s_launch_reason == APP_LAUNCH_WORKER && s_state == STATE_DISCONNECTED_MENU) {
@@ -458,6 +491,8 @@ static void init(void) {
   app_message_open(64, 64);
 
   s_launch_reason = launch_reason();
+  s_engaged = (s_launch_reason == APP_LAUNCH_USER ||
+               s_launch_reason == APP_LAUNCH_QUICK_LAUNCH);
   bool connected = connection_service_peek_pebble_app_connection();
 
   if (s_launch_reason == APP_LAUNCH_WORKER) {
@@ -465,6 +500,11 @@ static void init(void) {
     // still disconnected (standard alert), or we just reconnected
     // (see worker.c) - live status tells us which.
     s_state = connected ? STATE_RECONNECTED_LOCATE : STATE_DISCONNECTED_MENU;
+  } else if (connected && (s_launch_reason == APP_LAUNCH_USER ||
+                           s_launch_reason == APP_LAUNCH_QUICK_LAUNCH)) {
+    // Opened by hand with the phone connected: offer the locate option
+    // straight away instead of the brief "all good" splash.
+    s_state = STATE_CONNECTED_LOCATE;
   } else {
     s_state = connected ? STATE_SPLASH_OK : STATE_DISCONNECTED_MENU;
   }
