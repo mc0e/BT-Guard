@@ -1,0 +1,9 @@
+Keeps your phone on a tight leash.  
+
+The app runs as a background app, monitoring the bluetooth connection to your phone. If the bluetooth connection is lost, it will buzz you, repeatedly until the connection is re-established.  
+
+When the connection is first lost, the alert will repeat every 30 seconds, but an interface is presented for you to make this less frequent, or to turn it off altogether.  In any case the alert frequency resets to 30 seconds next time the connection is lost.
+
+This approach means you can decide not to go back and get your phone immediately, while still keeping an occasional reminder so you don't forget entirely, and without the possibility that you forget to turn it on again.
+
+When the connection is re-established you are presented with the option to make the phone make a sound to help you locate it.  I suspect this probably only works on android phones, but I don't have an iphone to test that.
