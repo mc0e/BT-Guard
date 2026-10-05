@@ -22,8 +22,8 @@
                     "type": "bitmap"
                 },
                 {
-                    "file": "images/pebble-banner-disconnected-48",
-                    "name": "IMAGE_DISCONNECTED_48",
+                    "file": "images/pebble-banner-disconnected.png",
+                    "name": "BANNER_DISCONNECTED",
                     "storageFormat": "png",
                     "targetPlatforms": [
                         "emery"
