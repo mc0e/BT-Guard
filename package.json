@@ -13,7 +13,7 @@
         "resources": {
             "media": [
                 {
-                    "file": "images/pebble-banner-connected-48.png",
+                    "file": "images/pebble-banner-connected.png",
                     "name": "BANNER_CONNECTED",
                     "storageFormat": "png",
                     "targetPlatforms": [
