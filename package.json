@@ -11,12 +11,30 @@
         ],
         "projectType": "native",
         "resources": {
-            "media": []
+            "media": [
+                {
+                    "file": "images/pebble-banner-connected-48.png",
+                    "name": "BANNER_CONNECTED",
+                    "storageFormat": "png",
+                    "targetPlatforms": [
+                        "emery"
+                    ],
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/pebble-banner-disconnected-48",
+                    "name": "IMAGE_DISCONNECTED_48",
+                    "storageFormat": "png",
+                    "targetPlatforms": [
+                        "emery"
+                    ],
+                    "type": "bitmap"
+                }
+            ]
         },
         "sdkVersion": "3",
         "targetPlatforms": [
-            "emery",
-            "flint"
+            "emery"
         ],
         "uuid": "2eb29eab-b154-4b17-8daf-ba6e64f7e71a",
         "watchapp": {
