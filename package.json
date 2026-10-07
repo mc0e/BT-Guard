@@ -29,12 +29,71 @@
                         "emery"
                     ],
                     "type": "bitmap"
+                },
+                {
+                    "file": "images/bell-emery.png",
+                    "name": "SNOOZE_ICON",
+                    "storageFormat": "png",
+                    "targetPlatforms": [
+                        "emery"
+                    ],
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/bell-flint.png",
+                    "name": "SNOOZE_ICON",
+                    "storageFormat": "png",
+                    "targetPlatforms": [
+                        "flint"
+                    ],
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/bell-gabbro.png",
+                    "name": "SNOOZE_ICON",
+                    "storageFormat": "png",
+                    "targetPlatforms": [
+                        "gabbro"
+                    ],
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/locate_icon.png",
+                    "name": "LOCATE_ICON",
+                    "storageFormat": "png",
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/action-up.png",
+                    "name": "ACTION_UP",
+                    "storageFormat": "png",
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/action-down.png",
+                    "name": "ACTION_DOWN",
+                    "storageFormat": "png",
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/action-select.png",
+                    "name": "ACTION_SELECT",
+                    "storageFormat": "png",
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/action-right.png",
+                    "name": "ACTION_RIGHT",
+                    "storageFormat": "png",
+                    "type": "bitmap"
                 }
             ]
         },
         "sdkVersion": "3",
         "targetPlatforms": [
-            "emery"
+            "emery",
+            "flint",
+            "gabbro"
         ],
         "uuid": "2eb29eab-b154-4b17-8daf-ba6e64f7e71a",
         "watchapp": {
