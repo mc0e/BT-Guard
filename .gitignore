@@ -3,3 +3,4 @@ node_modules/
 dist/
 .envrc
 .lock-waf*
+design/design_generated/

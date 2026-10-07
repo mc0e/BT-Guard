@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 50 50">
+  <title>Radar with crosshairs (50px, 1-bit black and white)</title>
+  <!-- Palette used: 000000 FFFFFF only -->
+
+  <!-- Dish outline -->
+  <circle cx="25" cy="25" r="24" fill="#FFFFFF" stroke="#000000" stroke-width="2"/>
+
+  <!-- Inner range ring and crosshairs -->
+  <circle cx="25" cy="25" r="12" fill="none" stroke="#000000" stroke-width="2"/>
+  <line x1="2" y1="25" x2="48" y2="25" stroke="#000000" stroke-width="2"/>
+  <line x1="25" y1="2" x2="25" y2="48" stroke="#000000" stroke-width="2"/>
+
+  <!-- Sweep: ring segment from 35 to 70 degrees above horizontal (r 6 to 21),
+       so it stays clear of both crosshair arms and the centre dot -->
+  <path d="M27.05 19.36 L32.18 5.27 A21 21 0 0 1 42.20 12.96 L29.91 21.56 A6 6 0 0 0 27.05 19.36 Z" fill="#000000"/>
+
+  <!-- Contact lit by the sweep (white knock-out), contact outside it (black) -->
+  <circle cx="35.5" cy="11.6" r="3" fill="#FFFFFF"/>
+  <circle cx="11" cy="36" r="3" fill="#000000"/>
+
+  <!-- Centre -->
+  <circle cx="25" cy="25" r="3" fill="#000000"/>
+</svg>

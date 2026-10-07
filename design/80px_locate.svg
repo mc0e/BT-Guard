@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80">
+  <title>Radar (80px, Pebble 64-colour palette)</title>
+  <!-- Palette used: 000000 005500 00AA00 00FF00 55FF55 FFFF00 FFFFFF -->
+
+  <!-- Dish: dark green disc with a black rim (rim fills out to the 80px edge) -->
+  <circle cx="40" cy="40" r="38" fill="#005500" stroke="#000000" stroke-width="4"/>
+
+  <!-- Sweep: dim trail, then bright band, clockwise leading edge on the right -->
+  <path d="M40 40 L40 4 A36 36 0 0 1 58 8.82 Z" fill="#00AA00"/>
+  <path d="M40 40 L58 8.82 A36 36 0 0 1 71.18 22 Z" fill="#00FF00"/>
+
+  <!-- Range rings and crosshair -->
+  <g fill="none" stroke="#00AA00" stroke-width="2">
+    <circle cx="40" cy="40" r="26"/>
+    <circle cx="40" cy="40" r="14"/>
+    <line x1="4" y1="40" x2="76" y2="40"/>
+    <line x1="40" y1="4" x2="40" y2="76"/>
+  </g>
+
+  <!-- Leading edge of the sweep -->
+  <line x1="40" y1="40" x2="71.18" y2="22" stroke="#FFFFFF" stroke-width="2"/>
+
+  <!-- Contacts: one freshly lit by the sweep, one fading -->
+  <circle cx="56" cy="20" r="4" fill="#FFFF00" stroke="#000000" stroke-width="1"/>
+  <circle cx="24" cy="52" r="3" fill="#55FF55"/>
+
+  <!-- Centre -->
+  <circle cx="40" cy="40" r="3" fill="#FFFFFF" stroke="#000000" stroke-width="1"/>
+</svg>

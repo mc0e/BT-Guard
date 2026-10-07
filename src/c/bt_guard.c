@@ -12,11 +12,11 @@
 // listed falls through to the #else defaults.
 //
 // Banner images: for each connection state the app looks for a bitmap
-// resource named BANNER_DISCONNECTED / BANNER_CONNECTED /
-// BANNER_RECONNECTED. If the resource doesn't exist on the platform
-// being built (declare it in package.json with "targetPlatforms"), that
-// state falls back to text drawn in font_banner. When any banner image
-// exists, the banner strip is as tall as the tallest one.
+// resource named BANNER_DISCONNECTED / BANNER_CONNECTED. If the resource
+// doesn't exist on the platform being built (declare it in package.json
+// with "targetPlatforms"), that state falls back to text drawn in
+// font_banner. When any banner image exists, the banner strip is as
+// tall as the tallest one.
 // ---------------------------------------------------------------------
 typedef struct {
   const char *font_banner;       // text fallback for the connection banner
@@ -144,12 +144,11 @@ static Layer *s_banner_layer;       // connection banner above the border
 typedef enum {
   BANNER_DISCONNECTED,
   BANNER_CONNECTED,
-  BANNER_RECONNECTED,
   BANNER_COUNT
 } BannerKind;
 
 static const char *const s_banner_text[BANNER_COUNT] = {
-  "Phone disconnected", "Phone connected", "Phone reconnected"
+  "Phone disconnected", "Phone connected"
 };
 static GBitmap *s_banner_bitmap[BANNER_COUNT];  // NULL = no image, use text
 static BannerKind s_banner_kind;
@@ -397,9 +396,6 @@ static uint32_t banner_resource_id(BannerKind kind) {
 #ifdef RESOURCE_ID_BANNER_CONNECTED
     case BANNER_CONNECTED: return RESOURCE_ID_BANNER_CONNECTED;
 #endif
-#ifdef RESOURCE_ID_BANNER_RECONNECTED
-    case BANNER_RECONNECTED: return RESOURCE_ID_BANNER_RECONNECTED;
-#endif
     default: return 0;
   }
 }
@@ -475,8 +471,7 @@ static void enter_state(AppScreenState new_state) {
 
     case STATE_CONNECTED_LOCATE:
     case STATE_RECONNECTED_LOCATE:
-      banner_show(new_state == STATE_RECONNECTED_LOCATE ? BANNER_RECONNECTED
-                                                        : BANNER_CONNECTED);
+      banner_show(BANNER_CONNECTED);
       layer_set_hidden(s_border_layer, false);
       layer_set_hidden(text_layer_get_layer(s_locate_layer), false);
       text_layer_set_text(s_locate_layer, "Press Select\nto sound phone");
