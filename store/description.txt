@@ -7,3 +7,9 @@ When the connection is first lost, the alert will repeat every 30 seconds, but a
 This approach means you can decide not to go back and get your phone immediately, while still keeping an occasional reminder so you don't forget entirely, and without the possibility that you forget to turn it on again.
 
 When the connection is re-established you are presented with the option to make the phone make a sound to help you locate it.  I suspect this probably only works on android phones, but I don't have an iphone to test that.
+
+RATIONALE
+
+I Have ADHD.  Without external prompting for when I need to do things, I have very little chance of remembering those things at the time when I need to do them.  My phone is an excellent tool for this, and it's larger interface makes it a better tool than a smart watch in most respects, but every so often my phone fails me.  It falls out of my pocket somewhere, or I leave it in the car, or the battery runs flat.
+
+I also have poor eyesight.  So far as possible i want this app to be usable without reaching for my glasses.  I'm developing for Emery first (Pebble Time 2), and aiming to make icons and colors do the work of conveying information.  On platforms where I haven't made the graphics, the app falls back to text display elements.
