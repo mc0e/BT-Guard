@@ -8,7 +8,7 @@ them into the store release notes. Keep entries short, plain, one per line.
 
 ## [Unreleased]
 
-- Added Flint and Emery to the list of supported pllatforms.  This should work on other platforms also, but that's untested.
+- Added Gabbro (Pebble Round 2) to the list of announced platforms.  This app should work on other platforms also, but that's untested.
 
 - Assorted layout changes, and increased use of graphical elements.
 
