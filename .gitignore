@@ -4,3 +4,4 @@ dist/
 .envrc
 .lock-waf*
 design/design_generated/
+ROADMAP.md
